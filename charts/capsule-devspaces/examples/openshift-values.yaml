@@ -1,0 +1,11 @@
+# OpenShift: let the restricted-v2 SCC assign UIDs.
+capsule:
+  podSecurityContext:
+    runAsUser: null
+    runAsGroup: null
+  global:
+    jobs:
+      kubectl:
+        securityContext:
+          runAsUser: null
+          runAsGroup: null

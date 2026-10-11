@@ -1,0 +1,63 @@
+{{- if and .Values.reaper.enabled .Values.reaper.admissionPolicy.enabled }}
+{{- $name := printf "%s-reaper" .Values.names.capsuleFullname }}
+{{- $keys := .Values.reaper.keys }}
+# Limits the reaper ServiceAccount, whatever its RBAC, to deleting or
+# annotating namespaces of the configured tenants that are not marked keep.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE", "DELETE"]
+        resources: ["namespaces"]
+  matchConditions:
+    - name: is-reaper
+      expression: >-
+        request.userInfo.username == "system:serviceaccount:{{ .Release.Namespace }}:{{ include "devspaces.reaper.name" . }}"
+  variables:
+    - name: oldLabels
+      expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
+    - name: newLabels
+      expression: "object != null && has(object.metadata.labels) ? object.metadata.labels : {}"
+    - name: oldAnnotations
+      expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+    - name: newAnnotations
+      expression: "object != null && has(object.metadata.annotations) ? object.metadata.annotations : {}"
+  validations:
+    - expression: >-
+        "capsule.clastix.io/tenant" in variables.oldLabels &&
+        variables.oldLabels["capsule.clastix.io/tenant"] in {{ toJson .Values.reaper.tenants }}
+      message: the reaper may only touch namespaces of tenants {{ join ", " .Values.reaper.tenants }}
+    - expression: >-
+        !({{ $keys.keep | quote }} in variables.oldLabels &&
+        variables.oldLabels[{{ $keys.keep | quote }}] == "true")
+      message: namespace is marked {{ $keys.keep }}=true
+    - expression: >-
+        request.operation == "DELETE" || (
+          variables.newLabels == variables.oldLabels &&
+          object.spec == oldObject.spec &&
+          variables.newAnnotations.all(k, k == {{ $keys.expiresAt | quote }} ||
+            (k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k])) &&
+          variables.oldAnnotations.all(k, k == {{ $keys.expiresAt | quote }} || k in variables.newAnnotations)
+        )
+      message: the reaper may only change the {{ $keys.expiresAt }} annotation
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+spec:
+  policyName: {{ $name }}
+  validationActions: ["Deny"]
+{{- end }}

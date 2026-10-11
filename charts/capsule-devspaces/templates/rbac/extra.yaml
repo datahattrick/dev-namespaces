@@ -1,0 +1,26 @@
+{{- range $name, $cr := .Values.clusterRoles }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  {{- include "devspaces.metadata" (dict "root" $ "obj" $cr) | nindent 2 }}
+{{- with $cr.aggregationRule }}
+aggregationRule:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+rules:
+  {{- toYaml ($cr.rules | default list) | nindent 2 }}
+{{- end }}
+{{- range $name, $crb := .Values.clusterRoleBindings }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  {{- include "devspaces.metadata" (dict "root" $ "obj" $crb) | nindent 2 }}
+roleRef:
+  {{- required (printf "clusterRoleBindings.%s.roleRef is required" $name) $crb.roleRef | toYaml | nindent 2 }}
+subjects:
+  {{- required (printf "clusterRoleBindings.%s.subjects is required" $name) $crb.subjects | toYaml | nindent 2 }}
+{{- end }}

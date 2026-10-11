@@ -1,0 +1,16 @@
+apiVersion: v2
+name: capsule-devspaces
+description: >-
+  Self-service developer namespaces on top of the Capsule controller,
+  with hardened RBAC and a TTL-based namespace reaper.
+type: application
+version: 0.1.0
+appVersion: "0.14.6"
+keywords:
+  - capsule
+  - multitenancy
+  - namespaces
+dependencies:
+  - name: capsule
+    version: 0.14.6
+    repository: oci://ghcr.io/projectcapsule/charts

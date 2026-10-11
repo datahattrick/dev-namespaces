@@ -1,0 +1,18 @@
+{{- $kinds := list
+  (list "Tenant" .Values.tenants)
+  (list "GlobalTenantResource" .Values.globalTenantResources)
+  (list "GlobalResourceQuota" .Values.globalResourceQuotas)
+  (list "GlobalCustomQuota" .Values.globalCustomQuotas)
+}}
+{{- range $kind := $kinds }}
+{{- range $name, $obj := (index $kind 1) }}
+---
+apiVersion: capsule.clastix.io/v1beta2
+kind: {{ index $kind 0 }}
+metadata:
+  name: {{ $name }}
+  {{- include "devspaces.metadata" (dict "root" $ "obj" $obj) | nindent 2 }}
+spec:
+  {{- required (printf "%s %s: spec is required" (index $kind 0) $name) $obj.spec | toYaml | nindent 2 }}
+{{- end }}
+{{- end }}

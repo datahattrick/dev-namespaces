@@ -1,0 +1,242 @@
+{{- include "devspaces.validate" . }}
+{{- if .Values.controllerRbac.create }}
+{{- $fullname := .Values.names.capsuleFullname }}
+{{- $sa := .Values.names.controllerServiceAccount }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s:controller" $fullname }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+rules:
+  # Capsule's own API.
+  - apiGroups: ["capsule.clastix.io"]
+    resources:
+      - capsuleconfigurations
+      - capsuleconfigurations/status
+      - customquotas
+      - customquotas/status
+      - globalcustomquotas
+      - globalcustomquotas/status
+      - globalresourcequotas
+      - globalresourcequotas/status
+      - globaltenantresources
+      - globaltenantresources/status
+      - quantityledgers
+      - quantityledgers/status
+      - resourcepoolclaims
+      - resourcepoolclaims/status
+      - resourcepools
+      - resourcepools/status
+      - rulestatuses
+      - rulestatuses/status
+      - tenantowners
+      - tenantowners/status
+      - tenantresources
+      - tenantresources/status
+      - tenants
+      - tenants/status
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Owner references with blockOwnerDeletion (enforced on OpenShift).
+  - apiGroups: ["capsule.clastix.io"]
+    resources:
+      - customquotas/finalizers
+      - globalcustomquotas/finalizers
+      - globalresourcequotas/finalizers
+      - globaltenantresources/finalizers
+      - resourcepools/finalizers
+      - tenantresources/finalizers
+      - tenants/finalizers
+    verbs: ["update"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    resourceNames:
+      - capsuleconfigurations.capsule.clastix.io
+      - globaltenantresources.capsule.clastix.io
+      - resourcepoolclaims.capsule.clastix.io
+      - resourcepools.capsule.clastix.io
+      - rulestatuses.capsule.clastix.io
+      - tenantowners.capsule.clastix.io
+      - tenantresources.capsule.clastix.io
+      - tenants.capsule.clastix.io
+    verbs: ["patch", "update"]
+  # Namespace assignment, metadata and deletion on Tenant removal. `create`
+  # is never exercised but must be held to write the provisioner ClusterRole
+  # (RBAC escalation check; name-scoped `escalate` does not apply to create).
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["namespaces/status"]
+    verbs: ["get", "update", "patch"]
+  # Metadata propagation from the Tenant to these objects.
+  - apiGroups: [""]
+    resources: ["pods", "services", "persistentvolumes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  # Objects Capsule renders into tenant namespaces from the Tenant spec.
+  - apiGroups: [""]
+    resources: ["limitranges", "resourcequotas"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  # Read-only lookups for admission decisions.
+  - apiGroups: [""]
+    resources:
+      - configmaps
+      - nodes
+      - persistentvolumeclaims
+      - serviceaccounts
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "ingressclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "gatewayclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["deviceclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["", "events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # Capsule's own webhook configurations only.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+    verbs: ["list", "watch", "create"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    resourceNames:
+      - {{ printf "%s-mutating-webhook-configuration" $fullname }}
+      - {{ printf "%s-dynamic-webhook" $fullname }}
+    verbs: ["get", "update", "patch", "delete"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations"]
+    resourceNames:
+      - {{ printf "%s-validating-webhook-configuration" $fullname }}
+      - {{ printf "%s-dynamic-webhook" $fullname }}
+    verbs: ["get", "update", "patch", "delete"]
+  # Provisioner/deleter ClusterRoles and the provisioner ClusterRoleBinding.
+  # `create` cannot be scoped by name; it is bounded by the absence of
+  # `escalate` and by the `bind` rule below.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    resourceNames:
+      - {{ .Values.names.provisionerClusterRole }}
+      - {{ .Values.names.deleterClusterRole }}
+    verbs: ["update", "patch", "delete"]
+  # The only ClusterRoles Capsule may hand out to tenant owners.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    resourceNames:
+      {{- include "devspaces.bindableClusterRoles" . | nindent 6 }}
+    verbs: ["bind"]
+  {{- if .Values.controllerRbac.allowCascadingCleanup }}
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "update", "patch", "delete"]
+  {{- end }}
+  {{- with .Values.controllerRbac.extraRules }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s:controller" $fullname }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s:controller" $fullname }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+# Aggregation point kept compatible with upstream: ClusterRoles labelled
+# projectcapsule.dev/aggregate-to-controller=true extend the controller.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s:aggregate" $fullname }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        projectcapsule.dev/aggregate-to-controller: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s:aggregate" $fullname }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s:aggregate" $fullname }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+# Leader election, webhook TLS secret and events in the release namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ printf "%s:controller" $fullname }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ printf "%s:controller" $fullname }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ printf "%s:controller" $fullname }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

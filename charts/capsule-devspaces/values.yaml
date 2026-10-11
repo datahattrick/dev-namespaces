@@ -1,0 +1,285 @@
+# Default values for capsule-devspaces.
+#
+# This chart wraps the upstream Capsule chart (`capsule:` below) and deploys
+# only the controller. The upstream controller RBAC (cluster-admin, or the
+# broad "strict" ClusterRole) is switched off and replaced by the hardened
+# RBAC rendered from `controllerRbac:`.
+
+# -- Names shared between this chart and the Capsule subchart.
+# These must match the corresponding `capsule.*` values below; the chart fails
+# to render if they drift.
+names:
+  # -- Must equal `capsule.fullnameOverride`. Used to derive webhook and secret names.
+  capsuleFullname: capsule
+  # -- Must equal `capsule.serviceAccount.name`.
+  controllerServiceAccount: capsule
+  # -- Must equal `capsule.manager.options.rbac.provisioner`.
+  provisionerClusterRole: capsule-namespace-provisioner
+  # -- Must equal `capsule.manager.options.rbac.deleter`.
+  deleterClusterRole: capsule-namespace-deleter
+
+# Hardened RBAC for the Capsule controller ServiceAccount.
+controllerRbac:
+  # -- Render the hardened ClusterRole, Role and bindings for the controller.
+  create: true
+  # -- Grant cluster-wide list/patch/delete on every resource (secrets
+  # included), which Capsule uses to strip finalizers from objects in
+  # terminating tenant namespaces. Upstream grants this; it is off here.
+  # Namespaces still delete normally, but the controller logs "forbidden"
+  # errors while each one terminates, and namespaces stuck on a finalizer
+  # need an administrator.
+  allowCascadingCleanup: false
+  # -- ClusterRoles the controller may `bind`, in addition to the
+  # provisioner/deleter roles, `capsule.manager.options.rbac.*ClusterRoles`,
+  # and any role named in `tenants` above. List every role used by Tenants and
+  # TenantOwners managed outside this chart (owners[].clusterRoles,
+  # additionalRoleBindings[].clusterRoleName); others fail to bind.
+  extraBindableClusterRoles:
+    - admin
+  # -- Extra cluster-scoped PolicyRules for the controller.
+  # The controller cannot impersonate, so GlobalTenantResources replicate with
+  # its own permissions: it already writes LimitRanges, ResourceQuotas,
+  # NetworkPolicies and RoleBindings; any other replicated kind needs a rule
+  # here. Kinds referenced by GlobalCustomQuota sources or Tenant rules need
+  # read access here.
+  extraRules: []
+  #  - apiGroups: [""]
+  #    resources: ["configmaps"]
+  #    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# -- Additional ClusterRoles, keyed by name.
+# Each value accepts `labels`, `annotations`, `rules` and `aggregationRule`.
+clusterRoles: {}
+#  devspaces-extra:
+#    rules:
+#      - apiGroups: ["route.openshift.io"]
+#        resources: ["routes/custom-host"]
+#        verbs: ["create"]
+
+# -- Additional ClusterRoleBindings, keyed by name.
+# Each value accepts `labels`, `annotations`, `roleRef` and `subjects`.
+clusterRoleBindings: {}
+#  devspaces-admins-view:
+#    roleRef:
+#      apiGroup: rbac.authorization.k8s.io
+#      kind: ClusterRole
+#      name: view
+#    subjects:
+#      - kind: Group
+#        apiGroup: rbac.authorization.k8s.io
+#        name: platform-admins
+
+# -- Capsule Tenants, keyed by name. `spec` is passed through unchanged.
+# Usually managed outside this chart. Every owner must list `clusterRoles`
+# explicitly, and each role must be bindable (see
+# `controllerRbac.extraBindableClusterRoles`).
+tenants: {}
+#  developers:
+#    spec:
+#      owners:
+#        - kind: Group
+#          name: devspaces-users
+#          clusterRoles:
+#            - admin
+#            - capsule-namespace-deleter
+#      namespaceOptions:
+#        quota: 50
+#        forbiddenLabels:
+#          denied:
+#            - devspaces.io/keep
+#        forbiddenAnnotations:
+#          denied:
+#            - devspaces.io/expires-at
+
+# -- GlobalTenantResources, keyed by name. `spec` is passed through unchanged.
+globalTenantResources: {}
+#  devspaces-baseline:
+#    spec:
+#      resyncPeriod: 60s
+#      pruningOnDelete: true
+#      settings: {}
+#      tenantSelector:
+#        matchLabels:
+#          capsule.clastix.io/tenant: developers
+#      resources:
+#        - rawItems:
+#            - apiVersion: networking.k8s.io/v1
+#              kind: NetworkPolicy
+#              metadata:
+#                name: default-deny-ingress
+#              spec:
+#                podSelector: {}
+#                policyTypes: ["Ingress"]
+
+# -- GlobalResourceQuotas, keyed by name. `spec` is passed through unchanged.
+globalResourceQuotas: {}
+#  devspaces-object-counts:
+#    spec:
+#      namespaceSelectors:
+#        - matchLabels:
+#            capsule.clastix.io/tenant: developers
+#      quota:
+#        hard:
+#          count/secrets: "200"
+
+# -- GlobalCustomQuotas, keyed by name. `spec` is passed through unchanged.
+globalCustomQuotas: {}
+
+# Deletes developer namespaces once they expire.
+#
+# Expiry is the namespace creationTimestamp plus `defaultTTL`, overridable per
+# namespace with labels (all capped at `maxTTL` from creation):
+#   devspaces.io/ttl: "3d"            lifetime from creation (s, m, h, d, w)
+#   devspaces.io/expires-on: "2026-11-30"   delete after this UTC date
+#   devspaces.io/delete: "true"       delete on the next run
+#   devspaces.io/keep: "true"         never delete (forbidden for tenant owners)
+reaper:
+  # -- Deploy the reaper CronJob.
+  enabled: true
+  # -- Cron schedule.
+  schedule: "*/15 * * * *"
+  # -- Optional CronJob time zone, e.g. `Europe/London`.
+  timeZone: ""
+  # -- Log what would be deleted without deleting or annotating anything.
+  dryRun: false
+  # -- Tenants whose namespaces are eligible for deletion.
+  tenants:
+    - developers
+  # -- Lifetime when no label overrides it.
+  defaultTTL: 7d
+  # -- Upper bound on any label override.
+  maxTTL: 30d
+  # -- Stop after this many deletions in a single run.
+  maxDeletionsPerRun: 25
+  # -- Write the computed expiry to the `devspaces.io/expires-at` annotation.
+  annotateExpiry: true
+  # -- Seconds to wait in each run for requested deletions to finish before
+  # logging `namespace_deletion_pending`.
+  deleteWaitSeconds: 120
+  # -- A tenant namespace terminating longer than this is logged as
+  # `namespace_deletion_stuck` on every run.
+  stuckAfter: 30m
+  # -- Fail the Job when any namespace is stuck, as well as on failed
+  # deletions and annotations.
+  failOnStuck: true
+  # -- `info` logs deletions, failures and run summaries; `debug` adds one line
+  # per namespace per run.
+  logLevel: info
+  # -- Label and annotation keys.
+  keys:
+    ttl: devspaces.io/ttl
+    expiresOn: devspaces.io/expires-on
+    deleteNow: devspaces.io/delete
+    keep: devspaces.io/keep
+    expiresAt: devspaces.io/expires-at
+  # -- Namespaces that are never deleted, whatever their labels.
+  protectedNamespaces:
+    - default
+    - kube-system
+    - kube-public
+    - kube-node-lease
+  # -- Namespaces matching this regex are never deleted.
+  protectedNamespaceRegex: "^(kube-|openshift)"
+  # -- Back the RBAC with a ValidatingAdmissionPolicy so the reaper can only
+  # delete or annotate namespaces of the tenants above that lack the keep label.
+  admissionPolicy:
+    enabled: true
+  image:
+    registry: registry.access.redhat.com
+    repository: ubi9/python-312
+    tag: "1"
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  activeDeadlineSeconds: 600
+  backoffLimit: 0
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Upstream Capsule chart values.
+# Reference: https://github.com/projectcapsule/capsule/tree/main/charts/capsule
+capsule:
+  fullnameOverride: capsule
+
+  serviceAccount:
+    create: true
+    name: capsule
+
+  crds:
+    install: true
+
+  proxy:
+    enabled: false
+
+  # Tenant owners get no access to Capsule CRDs.
+  rbac:
+    resources:
+      create: false
+    resourcepoolclaims:
+      create: false
+    customquotas:
+      create: false
+
+  monitoring:
+    dashboards:
+      enabled: false
+    serviceMonitor:
+      enabled: false
+    prometheusRules:
+      enabled: false
+
+  # Webhook certificates. Upstream defaults to cert-manager.
+  # Without cert-manager set `certManager.generateCertificates: false` and
+  # `tls.create: true` + `tls.enableController: true`.
+  certManager:
+    generateCertificates: true
+  tls:
+    create: false
+    enableController: false
+
+  manager:
+    # Replaced by `controllerRbac` above.
+    rbac:
+      create: false
+    options:
+      # Members of these groups can create namespaces; Capsule assigns them to
+      # the tenant they own.
+      users:
+        - kind: Group
+          name: devspaces-users
+      administrators: []
+      forceTenantPrefix: true
+      allowServiceAccountPromotion: false
+      protectedNamespaceRegex: "^(kube-|openshift|default$|capsule)"
+      rbac:
+        provisioner: capsule-namespace-provisioner
+        deleter: capsule-namespace-deleter
+        administrationClusterRoles:
+          - capsule-namespace-deleter
+        promotionClusterRoles: []
+
+  webhooks:
+    hooks:
+      # ResourcePools are not used; quota is enforced by ClusterResourceQuota.
+      resourcepools:
+        pools:
+          enabled: false
+        claims:
+          enabled: false

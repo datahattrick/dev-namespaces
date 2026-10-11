@@ -1,0 +1,6 @@
+dependencies:
+- name: capsule
+  repository: oci://ghcr.io/projectcapsule/charts
+  version: 0.14.6
+digest: sha256:5539d71b16778b57426134db290154515788ad4b03218b8786c5e717a6bb2137
+generated: "2026-10-12T09:20:24.318403537+13:00"

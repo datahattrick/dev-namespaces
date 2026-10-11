@@ -1,0 +1,120 @@
+{{- if .Values.reaper.enabled }}
+{{- $name := include "devspaces.reaper.name" . }}
+{{- $r := .Values.reaper }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+data:
+  reaper.py: |
+    {{- .Files.Get "files/reaper.py" | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+spec:
+  schedule: {{ $r.schedule | quote }}
+  {{- with $r.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ $r.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $r.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ $r.backoffLimit }}
+      activeDeadlineSeconds: {{ $r.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "devspaces.labels" . | nindent 12 }}
+            app.kubernetes.io/component: reaper
+          annotations:
+            checksum/script: {{ .Files.Get "files/reaper.py" | sha256sum }}
+        spec:
+          serviceAccountName: {{ $name }}
+          restartPolicy: Never
+          {{- with $r.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml $r.podSecurityContext | nindent 12 }}
+          containers:
+            - name: reaper
+              image: {{ printf "%s/%s:%s" $r.image.registry $r.image.repository $r.image.tag }}
+              imagePullPolicy: {{ $r.image.pullPolicy }}
+              command: ["python3", "-I", "/opt/reaper/reaper.py"]
+              env:
+                - name: REAPER_TENANTS
+                  value: {{ join "," $r.tenants | quote }}
+                - name: REAPER_DRY_RUN
+                  value: {{ $r.dryRun | quote }}
+                - name: REAPER_ANNOTATE_EXPIRY
+                  value: {{ $r.annotateExpiry | quote }}
+                - name: REAPER_DEFAULT_TTL
+                  value: {{ $r.defaultTTL | quote }}
+                - name: REAPER_MAX_TTL
+                  value: {{ $r.maxTTL | quote }}
+                - name: REAPER_DELETE_WAIT_SECONDS
+                  value: {{ $r.deleteWaitSeconds | quote }}
+                - name: REAPER_STUCK_AFTER
+                  value: {{ $r.stuckAfter | quote }}
+                - name: REAPER_FAIL_ON_STUCK
+                  value: {{ $r.failOnStuck | quote }}
+                - name: REAPER_LOG_LEVEL
+                  value: {{ $r.logLevel | quote }}
+                - name: REAPER_MAX_DELETIONS
+                  value: {{ $r.maxDeletionsPerRun | quote }}
+                - name: REAPER_PROTECTED
+                  value: {{ join "," (append $r.protectedNamespaces .Release.Namespace) | quote }}
+                - name: REAPER_PROTECTED_REGEX
+                  value: {{ $r.protectedNamespaceRegex | quote }}
+                - name: REAPER_KEY_TTL
+                  value: {{ $r.keys.ttl | quote }}
+                - name: REAPER_KEY_EXPIRES_ON
+                  value: {{ $r.keys.expiresOn | quote }}
+                - name: REAPER_KEY_DELETE
+                  value: {{ $r.keys.deleteNow | quote }}
+                - name: REAPER_KEY_KEEP
+                  value: {{ $r.keys.keep | quote }}
+                - name: REAPER_KEY_EXPIRES_AT
+                  value: {{ $r.keys.expiresAt | quote }}
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: "1"
+              securityContext:
+                {{- toYaml $r.securityContext | nindent 16 }}
+              {{- with $r.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              volumeMounts:
+                - name: script
+                  mountPath: /opt/reaper
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: {{ $name }}
+          {{- with $r.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $r.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $r.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

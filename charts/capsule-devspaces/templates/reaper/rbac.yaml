@@ -1,0 +1,45 @@
+{{- if .Values.reaper.enabled }}
+{{- $name := include "devspaces.reaper.name" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s:reaper" .Values.names.capsuleFullname }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs:
+      - get
+      - list
+      - delete
+      {{- if .Values.reaper.annotateExpiry }}
+      - patch
+      {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s:reaper" .Values.names.capsuleFullname }}
+  labels:
+    {{- include "devspaces.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s:reaper" .Values.names.capsuleFullname }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
