@@ -123,7 +123,24 @@ globalResourceQuotas: {}
 #          count/secrets: "200"
 
 # -- GlobalCustomQuotas, keyed by name. `spec` is passed through unchanged.
+# Every source kind must also be listed in
+# `capsule.webhooks.hooks.calculations.rules`, which grants the controller read
+# access to it and, with the webhook enabled, enforces the limit at admission.
 globalCustomQuotas: {}
+#  devspaces-loadbalancers:
+#    spec:
+#      limit: "2"
+#      options: {}
+#      namespaceSelectors:
+#        - matchLabels:
+#            capsule.clastix.io/tenant: developers
+#      sources:
+#        - apiVersion: v1
+#          kind: Service
+#          op: count
+#          selectors:
+#            - celExpressions:
+#                - object.spec.type == "LoadBalancer"
 
 # Deletes developer namespaces once they expire.
 #
@@ -283,3 +300,37 @@ capsule:
           enabled: false
         claims:
           enabled: false
+      # Capsule only exempts the garbage collector inside terminating
+      # namespaces, so objects it manages elsewhere (QuantityLedgers in this
+      # namespace) leak when their owner is deleted. Let the garbage collector
+      # delete them.
+      managed:
+        matchConditions:
+          - name: allow-garbage-collector-deletes
+            expression: >-
+              !(request.operation == "DELETE" &&
+              request.userInfo.username == "system:serviceaccount:kube-system:generic-garbage-collector")
+      # Admission-time enforcement of GlobalCustomQuota limits. Without it the
+      # controller only reports usage in the quota status.
+      calculations:
+        enabled: false
+        failurePolicy: Fail
+        matchPolicy: Equivalent
+        # Upstream matches every namespace; with failurePolicy Fail a controller
+        # outage would then block the counted kinds cluster-wide.
+        namespaceSelector:
+          matchExpressions:
+            - key: capsule.clastix.io/tenant
+              operator: Exists
+        objectSelector: {}
+        matchConditions: []
+        # Resources counted by GlobalCustomQuota sources. Also grants the
+        # controller get/list/watch on each, so list them even with the
+        # webhook disabled. Add the status subresource (e.g. pods/status) when
+        # a source path reads status fields.
+        rules: []
+        #  - apiGroups: [""]
+        #    apiVersions: ["v1"]
+        #    operations: ["CREATE", "UPDATE", "DELETE"]
+        #    resources: ["services"]
+        #    scope: Namespaced

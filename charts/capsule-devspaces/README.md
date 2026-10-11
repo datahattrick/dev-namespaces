@@ -7,6 +7,7 @@ and a CronJob that deletes those namespaces when they expire.
 - **Hardened controller RBAC.** Replaces upstream's `cluster-admin` binding. See [Controller RBAC](#controller-rbac).
 - **ClusterRoles, ClusterRoleBindings, GlobalTenantResources, GlobalResourceQuotas and GlobalCustomQuotas** from values.
   Tenants and TenantOwners are expected to be managed elsewhere; `tenants` is empty by default.
+- **Custom quota enforcement.** GlobalCustomQuota limits checked at admission. See [Custom quotas](#custom-quotas).
 - **Namespace reaper.** Deletes developer namespaces by age and labels. See [Reaper](#reaper).
 
 ## Requirements
@@ -79,6 +80,46 @@ Without it, owners can exempt their own namespaces from deletion.
 With it, owners can still remove a `keep` label an administrator set.
 `namespaceOptions.forbiddenLabels` does the same and is deprecated.
 
+## Custom quotas
+
+Each resource a GlobalCustomQuota counts is listed once, in the calculation webhook's rules.
+That list also grants the controller `get`, `list` and `watch` on those resources.
+
+```yaml
+globalCustomQuotas:
+  devspaces-jobs:
+    spec:
+      limit: "2"
+      options: {}
+      namespaceSelectors:
+        - matchLabels:
+            capsule.clastix.io/tenant: developers
+      sources:
+        - apiVersion: batch/v1
+          kind: Job
+          op: count
+
+capsule:
+  webhooks:
+    hooks:
+      calculations:
+        enabled: true
+        rules:
+          - apiGroups: ["batch"]
+            apiVersions: ["v1"]
+            operations: ["CREATE", "UPDATE", "DELETE"]
+            resources: ["jobs"]
+            scope: Namespaced
+```
+
+- With the webhook enabled, a request over the limit fails with `creating resource exceeds limit for GlobalCustomQuota "devspaces-jobs" (requested=1, currentUsed=3, ...)`. `currentUsed` includes the request.
+- With it disabled, the quota only reports usage in its status.
+- The webhook only matches tenant namespaces (`capsule.clastix.io/tenant` exists). Upstream matches every namespace, and with `failurePolicy: Fail` a controller outage would block the counted kinds cluster-wide.
+- The chart fails to render when `globalCustomQuotas` is set without rules, or the webhook is enabled without rules.
+- GlobalCustomQuotas managed outside the chart need their resources in the same rules. Otherwise the controller logs `jobs.batch is forbidden` and keeps running.
+- Status usage lags admission by a few seconds.
+- After removing a resource from the rules, restart the controller. Until then it logs `Failed to watch` with `is forbidden` every few seconds.
+
 ## Reaper
 
 Runs every 15 minutes.
@@ -149,7 +190,7 @@ The Job fails, with no retry, when a run logs `namespace_delete_failed`, `annota
 
 `capsule.manager.rbac.create` is `false`, and `templates/rbac/controller.yaml` binds the controller to a ClusterRole that:
 
-- Reads only the kinds Capsule's admission checks use; secrets only in its own namespace.
+- Reads only the kinds Capsule's admission checks use, plus those in `capsule.webhooks.hooks.calculations.rules`; secrets only in its own namespace.
 - Writes LimitRanges, ResourceQuotas, NetworkPolicies and RoleBindings, and metadata on namespaces, pods, services, PersistentVolumes and EndpointSlices.
 - Can `bind` only the ClusterRoles in `controllerRbac.extraBindableClusterRoles`, `capsule.manager.options.rbac` and any `tenants` in values.
 - Updates and deletes only its own webhook configurations and the `capsule-namespace-provisioner` and `capsule-namespace-deleter` ClusterRoles and bindings.
@@ -160,7 +201,7 @@ A GlobalTenantResource for a kind other than LimitRange, ResourceQuota, NetworkP
 A GlobalTenantResource or TenantResource that sets `serviceAccount` fails with `evaluating managed metadata: failed to get server groups: unknown`.
 So does a TenantResource without one, since upstream defaults `tenantDefaultServiceAccount` to `default` and this chart cannot unset it.
 
-A GlobalCustomQuota or Tenant rule that references another kind needs read access in `controllerRbac.extraRules`.
+A Tenant rule that references another kind needs read access in `controllerRbac.extraRules`.
 
 The controller also holds namespace `create`, which Kubernetes requires before it lets the controller write the provisioner ClusterRole.
 
@@ -172,11 +213,12 @@ Without it the controller logs `replicationcontrollers is forbidden` and similar
 
 - Tenant changes go through Capsule's webhook, so `helm upgrade` fails with `no endpoints available for service "capsule-webhook-service"` while the controller is down.
 - The ResourcePool controllers still run and their CRDs are installed; Capsule has no switch to disable them.
+- Capsule's `managed` webhook lets the Kubernetes garbage collector delete objects Capsule manages only in terminating namespaces. Without the `allow-garbage-collector-deletes` match condition this chart adds, the QuantityLedgers of a deleted GlobalResourceQuota are never removed, and deleting them by hand fails with `can only be done by the controller or administrators`.
 - After a failed upgrade, Helm compares against the last successful release, so objects added in the failed one are left behind and need deleting by hand.
 
 ## Tested
 
-On k3s 1.36 with Capsule 0.14.6: namespace self-service and prefix enforcement, owners bound to `admin` on an externally applied Tenant, GlobalTenantResource replication and refusal of impersonation, GlobalResourceQuota, every reaper label, and the admission policy.
+On k3s 1.36 with Capsule 0.14.6: namespace self-service and prefix enforcement, owners bound to `admin` on an externally applied Tenant, GlobalTenantResource replication and refusal of impersonation, GlobalResourceQuota and its ledger cleanup, GlobalCustomQuota enforcement through the calculation webhook, controller boot with no quotas and with a quota on an unreadable kind, every reaper label, and the admission policy.
 
 Not tested on OpenShift: ClusterResourceQuota interaction, the SCC override, and `OwnerReferencesPermissionEnforcement` (the chart grants `update` on Capsule `*/finalizers` for it).
 
@@ -186,4 +228,4 @@ Not tested on OpenShift: ClusterResourceQuota interaction, the SCC override, and
 |---|---|
 | [values.yaml](values.yaml) | All options, with comments |
 | [examples/openshift-values.yaml](examples/openshift-values.yaml) | OpenShift UID overrides |
-| [ci/test-values.yaml](ci/test-values.yaml) | GlobalTenantResource and GlobalResourceQuota used in testing |
+| [ci/test-values.yaml](ci/test-values.yaml) | GlobalTenantResource, GlobalResourceQuota and GlobalCustomQuota used in testing |

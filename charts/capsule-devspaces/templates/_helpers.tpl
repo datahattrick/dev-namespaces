@@ -67,6 +67,13 @@ Fail early when values that must agree between this chart and the subchart drift
 {{- if and .Values.controllerRbac.create $c.manager.rbac.create }}
 {{- fail "set capsule.manager.rbac.create=false when controllerRbac.create=true, otherwise the upstream cluster-admin binding is still installed" }}
 {{- end }}
+{{- $calc := $c.webhooks.hooks.calculations }}
+{{- if and $calc.enabled (not $calc.rules) }}
+{{- fail "capsule.webhooks.hooks.calculations.enabled needs rules listing the resources counted by GlobalCustomQuotas" }}
+{{- end }}
+{{- if and .Values.globalCustomQuotas (not $calc.rules) }}
+{{- fail "globalCustomQuotas need their source resources listed in capsule.webhooks.hooks.calculations.rules (grants the controller read access)" }}
+{{- end }}
 {{- range $name, $tnt := .Values.tenants }}
   {{- range $owner := ($tnt.spec.owners | default list) }}
     {{- if not $owner.clusterRoles }}

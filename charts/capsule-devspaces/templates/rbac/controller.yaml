@@ -152,6 +152,17 @@ rules:
     resourceNames:
       {{- include "devspaces.bindableClusterRoles" . | nindent 6 }}
     verbs: ["bind"]
+  {{- range (.Values.capsule.webhooks.hooks.calculations.rules | default list) }}
+  # Counted by GlobalCustomQuotas (capsule.webhooks.hooks.calculations.rules).
+  - apiGroups: {{ toJson .apiGroups }}
+    resources:
+      {{- $resources := list }}
+      {{- range .resources }}
+      {{- $resources = append $resources (first (splitList "/" .)) }}
+      {{- end }}
+      {{- toYaml ($resources | uniq) | nindent 6 }}
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.controllerRbac.allowCascadingCleanup }}
   - apiGroups: ["*"]
     resources: ["*"]
