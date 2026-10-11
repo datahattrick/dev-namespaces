@@ -41,3 +41,28 @@ globalResourceQuotas:
 
 reaper:
   schedule: "0 0 1 1 *"
+
+globalCustomQuotas:
+  devspaces-jobs:
+    spec:
+      limit: "2"
+      options: {}
+      namespaceSelectors:
+        - matchLabels:
+            capsule.clastix.io/tenant: developers
+      sources:
+        - apiVersion: batch/v1
+          kind: Job
+          op: count
+
+capsule:
+  webhooks:
+    hooks:
+      calculations:
+        enabled: true
+        rules:
+          - apiGroups: ["batch"]
+            apiVersions: ["v1"]
+            operations: ["CREATE", "UPDATE", "DELETE"]
+            resources: ["jobs"]
+            scope: Namespaced
