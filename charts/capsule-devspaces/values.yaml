@@ -84,9 +84,9 @@ tenants: {}
 #            - capsule-namespace-deleter
 #      namespaceOptions:
 #        quota: 50
-#        forbiddenLabels:
-#          denied:
-#            - devspaces.io/keep
+#        additionalMetadataList:
+#          - labels:
+#              devspaces.io/reap: "true"
 #        forbiddenAnnotations:
 #          denied:
 #            - devspaces.io/expires-at
@@ -144,12 +144,12 @@ globalCustomQuotas: {}
 
 # Deletes developer namespaces once they expire.
 #
-# Expiry is the namespace creationTimestamp plus `defaultTTL`, overridable per
-# namespace with labels (all capped at `maxTTL` from creation):
+# Only namespaces carrying the `selectorLabel` key, with any value, are
+# considered. Expiry is the namespace creationTimestamp plus `defaultTTL`,
+# overridable per namespace with labels (capped at `maxTTL` from creation):
 #   devspaces.io/ttl: "3d"            lifetime from creation (s, m, h, d, w)
-#   devspaces.io/expires-on: "2026-11-30"   delete after this UTC date
-#   devspaces.io/delete: "true"       delete on the next run
-#   devspaces.io/keep: "true"         never delete (forbidden for tenant owners)
+#   devspaces.io/delete: "true"       delete once expired (same as no label)
+#   devspaces.io/delete: "false"      never delete (forbid for tenant owners)
 reaper:
   # -- Deploy the reaper CronJob.
   enabled: true
@@ -159,9 +159,9 @@ reaper:
   timeZone: ""
   # -- Log what would be deleted without deleting or annotating anything.
   dryRun: false
-  # -- Tenants whose namespaces are eligible for deletion.
-  tenants:
-    - developers
+  # -- Label key that makes a namespace eligible for deletion. Its value is
+  # ignored.
+  selectorLabel: devspaces.io/reap
   # -- Lifetime when no label overrides it.
   defaultTTL: 7d
   # -- Upper bound on any label override.
@@ -185,9 +185,7 @@ reaper:
   # -- Label and annotation keys.
   keys:
     ttl: devspaces.io/ttl
-    expiresOn: devspaces.io/expires-on
-    deleteNow: devspaces.io/delete
-    keep: devspaces.io/keep
+    delete: devspaces.io/delete
     expiresAt: devspaces.io/expires-at
   # -- Namespaces that are never deleted, whatever their labels.
   protectedNamespaces:
@@ -198,7 +196,8 @@ reaper:
   # -- Namespaces matching this regex are never deleted.
   protectedNamespaceRegex: "^(kube-|openshift)"
   # -- Back the RBAC with a ValidatingAdmissionPolicy so the reaper can only
-  # delete or annotate namespaces of the tenants above that lack the keep label.
+  # delete or annotate namespaces with `selectorLabel` that are not marked
+  # `delete: "false"`.
   admissionPolicy:
     enabled: true
   image:

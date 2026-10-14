@@ -74,6 +74,9 @@ Fail early when values that must agree between this chart and the subchart drift
 {{- if and .Values.globalCustomQuotas (not $calc.rules) }}
 {{- fail "globalCustomQuotas need their source resources listed in capsule.webhooks.hooks.calculations.rules (grants the controller read access)" }}
 {{- end }}
+{{- if and .Values.reaper.enabled (not (regexMatch "^([a-z0-9.-]+/)?[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$" .Values.reaper.selectorLabel)) }}
+{{- fail "reaper.selectorLabel must be a single label key, e.g. devspaces.io/reap" }}
+{{- end }}
 {{- range $name, $tnt := .Values.tenants }}
   {{- range $owner := ($tnt.spec.owners | default list) }}
     {{- if not $owner.clusterRoles }}

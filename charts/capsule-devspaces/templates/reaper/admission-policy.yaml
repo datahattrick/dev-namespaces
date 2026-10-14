@@ -1,8 +1,10 @@
 {{- if and .Values.reaper.enabled .Values.reaper.admissionPolicy.enabled }}
 {{- $name := printf "%s-reaper" .Values.names.capsuleFullname }}
 {{- $keys := .Values.reaper.keys }}
+{{- $selector := .Values.reaper.selectorLabel }}
 # Limits the reaper ServiceAccount, whatever its RBAC, to deleting or
-# annotating namespaces of the configured tenants that are not marked keep.
+# annotating namespaces carrying the selector label that are not marked
+# delete=false.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -33,13 +35,12 @@ spec:
       expression: "object != null && has(object.metadata.annotations) ? object.metadata.annotations : {}"
   validations:
     - expression: >-
-        "capsule.clastix.io/tenant" in variables.oldLabels &&
-        variables.oldLabels["capsule.clastix.io/tenant"] in {{ toJson .Values.reaper.tenants }}
-      message: the reaper may only touch namespaces of tenants {{ join ", " .Values.reaper.tenants }}
+        {{ $selector | quote }} in variables.oldLabels
+      message: the reaper may only touch namespaces labelled {{ $selector }}
     - expression: >-
-        !({{ $keys.keep | quote }} in variables.oldLabels &&
-        variables.oldLabels[{{ $keys.keep | quote }}] == "true")
-      message: namespace is marked {{ $keys.keep }}=true
+        !({{ $keys.delete | quote }} in variables.oldLabels &&
+        variables.oldLabels[{{ $keys.delete | quote }}] == "false")
+      message: namespace is marked {{ $keys.delete }}=false
     - expression: >-
         request.operation == "DELETE" || (
           variables.newLabels == variables.oldLabels &&

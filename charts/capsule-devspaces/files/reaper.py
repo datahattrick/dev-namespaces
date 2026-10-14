@@ -69,15 +69,6 @@ def parse_duration(value):
     return dt.timedelta(seconds=int(m.group(1)) * UNITS[m.group(2)])
 
 
-def parse_date(value):
-    """Parse 'YYYY-MM-DD' as the end of that day in UTC. Returns None if invalid."""
-    try:
-        day = dt.date.fromisoformat(value.strip())
-    except ValueError:
-        return None
-    return dt.datetime.combine(day, dt.time.max, dt.timezone.utc).replace(microsecond=0)
-
-
 def parse_ts(value):
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
@@ -185,21 +176,15 @@ def expiry_of(ns, cfg, counts):
     created = parse_ts(meta["creationTimestamp"])
     ceiling = created + cfg["max_ttl"]
 
-    if labels.get(cfg["key_delete"]) == "true":
-        return now(), "delete-label"
-
-    for key, parse, reason in (
-        (cfg["key_expires_on"], parse_date, "expires-on-label"),
-        (cfg["key_ttl"], lambda v: (lambda d: created + d if d else None)(parse_duration(v)), "ttl-label"),
-    ):
-        if key in labels:
-            value = parse(labels[key])
-            if value is not None:
-                capped = value > ceiling
-                return min(value, ceiling), reason + ("-capped" if capped else "")
-            counts["invalid_labels"] += 1
-            log("warning", "label_invalid", "ignoring invalid label value",
-                label=key, value=labels[key], **ns_fields(ns))
+    key = cfg["key_ttl"]
+    if key in labels:
+        ttl = parse_duration(labels[key])
+        if ttl is not None:
+            value = created + ttl
+            return min(value, ceiling), "ttl-label" + ("-capped" if value > ceiling else "")
+        counts["invalid_labels"] += 1
+        log("warning", "label_invalid", "ignoring invalid label value",
+            label=key, value=labels[key], **ns_fields(ns))
 
     return min(created + cfg["default_ttl"], ceiling), "default-ttl"
 
@@ -212,7 +197,7 @@ def config():
         return value
 
     cfg = {
-        "tenants": [t for t in os.environ["REAPER_TENANTS"].split(",") if t],
+        "selector": os.environ["REAPER_SELECTOR_LABEL"].strip(),
         "annotate": os.environ.get("REAPER_ANNOTATE_EXPIRY") == "true",
         "default_ttl": duration("REAPER_DEFAULT_TTL"),
         "max_ttl": duration("REAPER_MAX_TTL"),
@@ -223,13 +208,11 @@ def config():
         "protected": set(filter(None, os.environ.get("REAPER_PROTECTED", "").split(","))),
         "protected_re": re.compile(os.environ["REAPER_PROTECTED_REGEX"]) if os.environ.get("REAPER_PROTECTED_REGEX") else None,
         "key_ttl": os.environ["REAPER_KEY_TTL"],
-        "key_expires_on": os.environ["REAPER_KEY_EXPIRES_ON"],
         "key_delete": os.environ["REAPER_KEY_DELETE"],
-        "key_keep": os.environ["REAPER_KEY_KEEP"],
         "key_expires_at": os.environ["REAPER_KEY_EXPIRES_AT"],
     }
-    if not cfg["tenants"]:
-        raise ValueError("REAPER_TENANTS is empty")
+    if not cfg["selector"]:
+        raise ValueError("REAPER_SELECTOR_LABEL is empty")
     if cfg["default_ttl"] > cfg["max_ttl"]:
         raise ValueError("default TTL exceeds max TTL")
     return cfg
@@ -247,8 +230,9 @@ def main():
          "delete_failed", "stuck", "annotated", "annotate_failed", "invalid_labels"], 0)
     started = time.monotonic()
     client = Client()
-    selector = f"{TENANT_LABEL} in ({','.join(cfg['tenants'])})"
-    log("info", "run_started", "reaper run started", selector=selector, tenants=cfg["tenants"],
+    # Any namespace carrying the label, whatever its value.
+    selector = cfg["selector"]
+    log("info", "run_started", "reaper run started", selector=selector,
         default_ttl=os.environ["REAPER_DEFAULT_TTL"], max_ttl=os.environ["REAPER_MAX_TTL"])
 
     try:
@@ -281,10 +265,15 @@ def main():
                 log("debug", "namespace_terminating", "namespace is terminating", **ns_fields(ns), **details)
             continue
 
-        if meta.get("labels", {}).get(cfg["key_keep"]) == "true":
+        delete = meta.get("labels", {}).get(cfg["key_delete"])
+        if delete == "false":
             counts["kept"] += 1
-            log("debug", "namespace_skipped", "namespace is marked keep", skip_reason="keep", **ns_fields(ns))
+            log("debug", "namespace_skipped", "namespace is marked delete=false", skip_reason="delete-false", **ns_fields(ns))
             continue
+        if delete not in (None, "true"):
+            counts["invalid_labels"] += 1
+            log("warning", "label_invalid", "ignoring invalid label value",
+                label=cfg["key_delete"], value=delete, **ns_fields(ns))
 
         expiry, reason = expiry_of(ns, cfg, counts)
         fields = {**ns_fields(ns), "expires_at": iso(expiry), "expiry_reason": reason}
