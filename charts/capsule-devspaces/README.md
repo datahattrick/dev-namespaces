@@ -53,10 +53,14 @@ For CPU and memory, select namespaces in a ClusterResourceQuota with `capsule.cl
 Every ClusterRole a Tenant or TenantOwner grants must be in `controllerRbac.extraBindableClusterRoles` (default `admin`).
 Otherwise the owner RoleBinding fails with `is attempting to grant RBAC permissions not currently held`.
 
-For the reaper, a Tenant needs its name in `reaper.tenants` and this rule:
+For the reaper, a Tenant needs to label its namespaces with `reaper.selectorLabel` (default `devspaces.io/reap`, any value) and to forbid `delete: "false"`:
 
 ```yaml
 spec:
+  namespaceOptions:
+    additionalMetadataList:
+      - labels:
+          devspaces.io/reap: "true"
   rules:
     - audience:
         - kind: Custom
@@ -67,9 +71,9 @@ spec:
           - apiGroups: ["v1"]
             kinds: ["Namespace"]
             labels:
-              devspaces.io/keep:
+              devspaces.io/delete:
                 required: false
-                values: [{exp: "^.*$"}]
+                values: [{exp: "^false$"}]
             annotations:
               devspaces.io/expires-at:
                 required: false
@@ -77,7 +81,7 @@ spec:
 ```
 
 Without it, owners can exempt their own namespaces from deletion.
-With it, owners can still remove a `keep` label an administrator set.
+With it, owners can still remove a `delete: "false"` label an administrator set.
 `namespaceOptions.forbiddenLabels` does the same and is deprecated.
 
 ## Custom quotas
@@ -123,23 +127,22 @@ capsule:
 ## Reaper
 
 Runs every 15 minutes.
-A namespace in `reaper.tenants` expires at its creation time plus `reaper.defaultTTL` (7d), unless a label overrides it:
+A namespace with the `reaper.selectorLabel` label, whatever its value, expires at its creation time plus `reaper.defaultTTL` (7d), unless a label overrides it:
 
 | Label | Value | Effect |
 |---|---|---|
 | `devspaces.io/ttl` | `90m`, `36h`, `3d`, `2w` | Lifetime from creation |
-| `devspaces.io/expires-on` | `2026-11-30` | Delete after the end of this UTC day |
-| `devspaces.io/delete` | `true` | Delete on the next run |
-| `devspaces.io/keep` | `true` | Never delete |
+| `devspaces.io/delete` | `true` | Delete once expired, same as no label |
+| `devspaces.io/delete` | `false` | Never delete |
 
 - Overrides are capped at `reaper.maxTTL` (30d) from creation.
 - An invalid value is logged and the default TTL applies.
-- Tenant owners cannot set `devspaces.io/keep` when the Tenant forbids it (see [Tenants](#tenants)); an administrator sets it.
+- Tenant owners cannot set `devspaces.io/delete: "false"` when the Tenant forbids it (see [Tenants](#tenants)); an administrator sets it.
 - The computed expiry is written to the `devspaces.io/expires-at` annotation.
 - At most `reaper.maxDeletionsPerRun` (25) namespaces are deleted per run.
 - `reaper.dryRun: true` logs deletions without making them.
 
-A `ValidatingAdmissionPolicy` limits the reaper's ServiceAccount to deleting, or setting the `expires-at` annotation on, namespaces of `reaper.tenants` without `keep=true`.
+A `ValidatingAdmissionPolicy` limits the reaper's ServiceAccount to deleting, or setting the `expires-at` annotation on, namespaces with `reaper.selectorLabel` that are not marked `delete=false`.
 
 To run it now:
 
@@ -157,7 +160,7 @@ Namespace events add `namespace`, `tenant`, `uid`, `created_at` and `age_seconds
 
 | `event` | Level | Meaning | Extra fields |
 |---|---|---|---|
-| `run_started` | info | Run began | `selector`, `tenants`, `default_ttl`, `max_ttl` |
+| `run_started` | info | Run began | `selector`, `default_ttl`, `max_ttl` |
 | `namespace_delete_requested` | info | API accepted the deletion | `expires_at`, `expiry_reason`, `overdue_seconds` |
 | `namespace_deleted` | info | Namespace confirmed gone | as above, `deletion_seconds` |
 | `namespace_would_delete` | info | Dry run only | as `namespace_delete_requested` |
@@ -172,7 +175,7 @@ Namespace events add `namespace`, `tenant`, `uid`, `created_at` and `age_seconds
 | `config_invalid` | error | Bad environment; run aborted | `error` |
 | `run_finished` | info, or error if anything failed | Run summary | `duration_seconds` and counts: `scanned`, `kept`, `protected`, `terminating`, `expired`, `deleted`, `pending`, `delete_failed`, `stuck`, `annotated`, `annotate_failed`, `invalid_labels` |
 
-`expiry_reason` is one of `default-ttl`, `ttl-label`, `expires-on-label` or `delete-label`; `-capped` is appended when `maxTTL` applied.
+`expiry_reason` is `default-ttl` or `ttl-label`; `-capped` is appended when `maxTTL` applied.
 
 `conditions` carries the namespace's own deletion conditions, for example:
 
@@ -181,10 +184,10 @@ Namespace events add `namespace`, `tenant`, `uid`, `created_at` and `age_seconds
  "message": "Some content in the namespace has finalizers remaining: example.com/block in 1 resource instances"}
 ```
 
-`namespace_deletion_stuck` covers every terminating namespace of `reaper.tenants`, including ones deleted by their owners.
+`namespace_deletion_stuck` covers every terminating namespace with `reaper.selectorLabel`, including ones deleted by their owners.
 
 The Job fails, with no retry, when a run logs `namespace_delete_failed`, `annotate_failed`, `list_failed` or `config_invalid`, or `namespace_deletion_stuck` while `reaper.failOnStuck` is `true`, so a failed-Job alert covers these.
-`reaper.logLevel: debug` adds a line per namespace per run: `namespace_evaluated`, `namespace_skipped` (`skip_reason`: `keep` or `protected`) and `namespace_terminating`.
+`reaper.logLevel: debug` adds a line per namespace per run: `namespace_evaluated`, `namespace_skipped` (`skip_reason`: `delete-false` or `protected`) and `namespace_terminating`.
 
 ## Controller RBAC
 

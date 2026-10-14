@@ -55,8 +55,8 @@ spec:
               imagePullPolicy: {{ $r.image.pullPolicy }}
               command: ["python3", "-I", "/opt/reaper/reaper.py"]
               env:
-                - name: REAPER_TENANTS
-                  value: {{ join "," $r.tenants | quote }}
+                - name: REAPER_SELECTOR_LABEL
+                  value: {{ $r.selectorLabel | quote }}
                 - name: REAPER_DRY_RUN
                   value: {{ $r.dryRun | quote }}
                 - name: REAPER_ANNOTATE_EXPIRY
@@ -81,12 +81,8 @@ spec:
                   value: {{ $r.protectedNamespaceRegex | quote }}
                 - name: REAPER_KEY_TTL
                   value: {{ $r.keys.ttl | quote }}
-                - name: REAPER_KEY_EXPIRES_ON
-                  value: {{ $r.keys.expiresOn | quote }}
                 - name: REAPER_KEY_DELETE
-                  value: {{ $r.keys.deleteNow | quote }}
-                - name: REAPER_KEY_KEEP
-                  value: {{ $r.keys.keep | quote }}
+                  value: {{ $r.keys.delete | quote }}
                 - name: REAPER_KEY_EXPIRES_AT
                   value: {{ $r.keys.expiresAt | quote }}
                 - name: PYTHONDONTWRITEBYTECODE
